@@ -7,6 +7,8 @@ from transformers import Trainer, TrainingArguments
 import torch
 import pandas as pd
 
+from subprocess import run
+
 def load_models():
     tokenizer = RobertaTokenizer.from_pretrained('roberta-base')
     model = RobertaForSequenceClassification.from_pretrained('roberta-base')
@@ -63,18 +65,17 @@ class QAValidationDataset(torch.utils.data.Dataset):
 # TRAIN STUFF
 model, tokenizer = load_models()
 train, val, test = load_dataset()
-print(len(train[0]), len(train[1]))
 train, val, test = [QAValidationDataset(tokenizer, *ds) for ds in load_dataset()]
 
 training_args = TrainingArguments(
-    output_dir='./results',         # output directory
-    num_train_epochs=3,             # total number of training epochs
-    per_device_train_batch_size=16, # batch size per device during training
+    output_dir=run(['witty-phrase-generator', '-a2'], capture_output=True, text=True).stdout.strip(),
+    num_train_epochs=30,            # total number of training epochs
+    per_device_train_batch_size=32, # batch size per device during training
     per_device_eval_batch_size=64,  # batch size for evaluation
     warmup_steps=500,               # number of warmup steps for learning rate scheduler
     weight_decay=0.01,              # strength of weight decay
     logging_dir='./logs',           # directory for storing logs
-    logging_steps=10,
+    logging_steps=1,
     report_to="wandb"               # log to wandb
 )
 
@@ -88,10 +89,10 @@ trainer = Trainer(
 trainer.train()
 
 # TEST STUFF
+model.to('cpu')
 inputs = tokenizer("Hello, my dog is cute", return_tensors="pt")
 labels = torch.tensor([1]).unsqueeze(0)  # Batch size 1
 outputs = model(**inputs, labels=labels)
 loss = outputs.loss
 logits = outputs.logits
 
-print(logits)
