@@ -5,8 +5,13 @@ RUNS = ['bert_large:squad', 'bert_large:nq_closed']
 from transformers import RobertaTokenizer, RobertaForSequenceClassification
 from transformers import Trainer, TrainingArguments
 import torch
+from torch import nn
+from torch.utils.data import DataLoader
 import pandas as pd
+from tqdm import tqdm, trange
+import wandb
 
+from operator import itemgetter
 from subprocess import run
 
 def load_models():
@@ -63,30 +68,55 @@ class QAValidationDataset(torch.utils.data.Dataset):
         return len(self.labels)
 
 # TRAIN STUFF
+BATCH_SIZE = 64
+LEARNING_RATE = 1e-6
+EPOCHS = 100
+# dataloaders vs datasets https://pytorch.org/tutorials/beginner/basics/data_tutorial.html
+# finetuning a huggingface model using native pytorch https://huggingface.co/docs/transformers/training
+
+device = 'cuda' if torch.cuda.is_available() else 'cpu'
 model, tokenizer = load_models()
-train, val, test = load_dataset()
-train, val, test = [QAValidationDataset(tokenizer, *ds) for ds in load_dataset()]
+train_dataloader, val_dataloader, test_dataloader = [DataLoader(QAValidationDataset(tokenizer, *dat), batch_size=BATCH_SIZE, shuffle=True) for dat in load_dataset()]
 
-training_args = TrainingArguments(
-    output_dir=run(['witty-phrase-generator', '-a2'], capture_output=True, text=True).stdout.strip(),
-    num_train_epochs=30,            # total number of training epochs
-    per_device_train_batch_size=32, # batch size per device during training
-    per_device_eval_batch_size=64,  # batch size for evaluation
-    warmup_steps=500,               # number of warmup steps for learning rate scheduler
-    weight_decay=0.01,              # strength of weight decay
-    logging_dir='./logs',           # directory for storing logs
-    logging_steps=1,
-    report_to="wandb"               # log to wandb
-)
+wandb.init(project='qaval_roberta_noaug')
 
-trainer = Trainer(
-    model=model,                    # the instantiated 🤗 Transformers model to be trained
-    args=training_args,             # training arguments, defined above
-    train_dataset=train,            # training dataset
-    eval_dataset=val                # evaluation dataset
-)
+loss_fn = nn.NLLLoss()
+optimizer = torch.optim.SGD(model.parameters(), lr=LEARNING_RATE)
 
-trainer.train()
+model.to(device)
+
+def train(dataloader, model, loss_fn, optimizer):
+    for num, batch in tqdm(enumerate(dataloader), total=len(dataloader), leave=False):
+        X = batch['input_ids'].to(device)
+        y = batch['labels'].to(device)
+        pred = model(X)
+        loss = loss_fn(pred.logits, y)
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+
+        wandb.log({'loss': loss})
+
+def test(dataloader, model, loss_fn):
+    test_loss, correct = 0, 0
+
+    with torch.no_grad():
+        for batch in dataloader:
+            X, y = itemgetter('input_ids', 'labels')(batch)
+            X = X.to(device)
+            y = y.to(device)
+            pred = model(X)
+            test_loss += loss_fn(pred.logits, y).item()
+            correct += (pred.logits.argmax(1) == y).type(torch.float).sum().item()
+
+    test_loss /= len(dataloader)
+    correct /= len(dataloader.dataset)
+
+    wandb.log({ 'test_loss': test_loss, 'accuracy': correct })
+
+for t in trange(EPOCHS):
+    train(train_dataloader, model, loss_fn, optimizer)
+    test(val_dataloader, model, loss_fn)
 
 # TEST STUFF
 model.to('cpu')
