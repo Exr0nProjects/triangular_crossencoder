@@ -38,8 +38,8 @@ def load_models():
     return model, tokenizer
 
 def load_dataset(tokenizer):
-    # dses = [ hf_load_dataset('stsb_multi_mt', name='en', split=split) for split in ['train', 'dev', 'test'] ]
-    # return [QAValidationDataset(tokenizer, [ [None, None, None, s1, s1, s2] for s1, s2 in zip(things['sentence1'], things['sentence2']) ], things['similarity_score']) for things in dses]
+    dses = [ hf_load_dataset('stsb_multi_mt', name='en', split=split) for split in ['train', 'dev', 'test'] ]
+    return [QAValidationDataset(tokenizer, [ [None, None, None, s1, s1, s2] for s1, s2 in zip(things['sentence1'], things['sentence2']) ], [ s/5 for s in things['similarity_score'] ]) for things in dses]
 
     def load_raw_data(dataset_file, annotation_file, use_runs):
         data = pd.read_csv(dataset_file)
@@ -77,7 +77,7 @@ def load_dataset(tokenizer):
 
 # TRAIN STUFF
 BATCH_SIZE = 64
-LEARNING_RATE = 1e-5
+LEARNING_RATE = 1e-3
 EPOCHS = int(1e5)
 # dataloaders vs datasets https://pytorch.org/tutorials/beginner/basics/data_tutorial.html
 # finetuning a huggingface model using native pytorch https://huggingface.co/docs/transformers/training
@@ -96,7 +96,9 @@ model.to(device)
 def train(dataloader, model, optimizer):
     for num, batch in tqdm(enumerate(dataloader), total=len(dataloader), leave=False):
         X = batch['input_ids'].to(device)
-        y = batch['labels'].to(device)
+        y = batch['labels']
+        y = torch.stack((y, 1-y)).transpose(0, 1).to(device)
+
         pred = model(X, labels=y)
 
         optimizer.zero_grad()
@@ -112,12 +114,16 @@ def test(dataloader, model):
         for batch in dataloader:
             X, y = itemgetter('input_ids', 'labels')(batch)
             X = X.to(device)
-            y = y.to(device)
+            y = batch['labels']
+            accuracy = (y > 0.5).type(torch.int).to(device)
+            y = torch.stack((y, 1-y)).transpose(0, 1).to(device)
             pred = model(X, labels=y)
             test_loss += pred.loss.item()
+
+            # print('heres the preds', pred.logits.argmax(dim=1), 'heres labels', accuracy, 'heres the shapes', [pred.logits.argmax(dim=1).shape, accuracy.shape, 100])
             # test_loss += loss_fn(pred.logits, y).item()
             # print('adding', (pred.logits.argmax(dim=1) == y).type(torch.float).sum().item())
-            correct += (pred.logits.argmax(dim=1) == y).type(torch.float).sum().item()
+            correct += (pred.logits.argmax(dim=1) == accuracy).type(torch.float).sum().item()
             # print('    ', correct)
 
     # print('total correct:', correct)
