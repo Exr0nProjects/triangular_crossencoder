@@ -2,6 +2,9 @@ DATASET_FILE, HUMAN_ANNOTATIONS = 'sampled_fails_500.csv', 'analyzed_fails_984.t
 RUNS = ['bert_large:squad', 'bert_large:nq_closed']
 
 # load models and datasets
+from sentence_transformers.cross_encoder import CrossEncoder
+from datasets import load_dataset as hf_load_dataset
+
 from transformers import RobertaTokenizer, RobertaForSequenceClassification
 from transformers import Trainer, TrainingArguments
 import torch
@@ -14,13 +17,30 @@ import wandb
 from operator import itemgetter
 from subprocess import run
 
+class QAValidationDataset(torch.utils.data.Dataset):
+    def __init__(self, tokenizer, data, labels):
+        data = [ f"<s>{q}</s>{a}</s>{g}</s>" for _, _, _, q, a, g in data ]
+        self.encodings = tokenizer(data, truncation=True, padding=True)
+        self.labels = labels
+
+    def __getitem__(self, idx):
+        item = {key: torch.tensor(val[idx]) for key, val in self.encodings.items()}
+        item['labels'] = torch.tensor(self.labels[idx])
+        return item
+
+    def __len__(self):
+        return len(self.labels)
+
 def load_models():
-    tokenizer = RobertaTokenizer.from_pretrained('roberta-base')
-    model = RobertaForSequenceClassification.from_pretrained('roberta-base')
+    model, tokenizer = RobertaForSequenceClassification.from_pretrained('roberta-base'), RobertaTokenizer.from_pretrained('roberta-base')
+    # model, tokenizer = CrossEncoder('roberta')
     print('models loaded')
     return model, tokenizer
 
-def load_dataset():
+def load_dataset(tokenizer):
+    # dses = [ hf_load_dataset('stsb_multi_mt', name='en', split=split) for split in ['train', 'dev', 'test'] ]
+    # return [QAValidationDataset(tokenizer, [ [None, None, None, s1, s1, s2] for s1, s2 in zip(things['sentence1'], things['sentence2']) ], things['similarity_score']) for things in dses]
+
     def load_raw_data(dataset_file, annotation_file, use_runs):
         data = pd.read_csv(dataset_file)
         data = data[data['run'].isin(use_runs)]
@@ -51,53 +71,41 @@ def load_dataset():
         return (x_train, y_train), (x_val, y_val), (x_test, y_test)
 
     data, labels = load_raw_data(DATASET_FILE, HUMAN_ANNOTATIONS, RUNS)
-    return split_dataset(data, 0.8, 0.1, 0.1, labels)
+    # return split_dataset(data, 0.8, 0.1, 0.1, labels)
+    return [QAValidationDataset(tokenizer, *dat) for dat in split_dataset(data, 0.8, 0.1, 0.1, labels)]
 
-class QAValidationDataset(torch.utils.data.Dataset):
-    def __init__(self, tokenizer, data, labels):
-        data = [ f"<s>{q}</s>{a}</s>{g}</s>" for _, _, _, q, a, g in data ]
-        self.encodings = tokenizer(data, truncation=True, padding=True)
-        self.labels = labels
-
-    def __getitem__(self, idx):
-        item = {key: torch.tensor(val[idx]) for key, val in self.encodings.items()}
-        item['labels'] = torch.tensor(self.labels[idx])
-        return item
-
-    def __len__(self):
-        return len(self.labels)
 
 # TRAIN STUFF
 BATCH_SIZE = 64
-LEARNING_RATE = 1e-6
-EPOCHS = 100
+LEARNING_RATE = 1e-5
+EPOCHS = int(1e5)
 # dataloaders vs datasets https://pytorch.org/tutorials/beginner/basics/data_tutorial.html
 # finetuning a huggingface model using native pytorch https://huggingface.co/docs/transformers/training
 
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 model, tokenizer = load_models()
-train_dataloader, val_dataloader, test_dataloader = [DataLoader(QAValidationDataset(tokenizer, *dat), batch_size=BATCH_SIZE, shuffle=True) for dat in load_dataset()]
-
+train_dataloader, val_dataloader, test_dataloader = [DataLoader(ds, BATCH_SIZE, shuffle=True) for ds in load_dataset(tokenizer)]
 wandb.init(project='qaval_roberta_noaug')
+wandb.watch(model)
 
-loss_fn = nn.NLLLoss()
+# loss_fn = nn.NLLLoss()
 optimizer = torch.optim.SGD(model.parameters(), lr=LEARNING_RATE)
 
 model.to(device)
 
-def train(dataloader, model, loss_fn, optimizer):
+def train(dataloader, model, optimizer):
     for num, batch in tqdm(enumerate(dataloader), total=len(dataloader), leave=False):
         X = batch['input_ids'].to(device)
         y = batch['labels'].to(device)
-        pred = model(X)
-        loss = loss_fn(pred.logits, y)
+        pred = model(X, labels=y)
+
         optimizer.zero_grad()
-        loss.backward()
+        pred.loss.backward()
         optimizer.step()
 
-        wandb.log({'loss': loss})
+        wandb.log({'loss': pred.loss.item()})
 
-def test(dataloader, model, loss_fn):
+def test(dataloader, model):
     test_loss, correct = 0, 0
 
     with torch.no_grad():
@@ -105,9 +113,14 @@ def test(dataloader, model, loss_fn):
             X, y = itemgetter('input_ids', 'labels')(batch)
             X = X.to(device)
             y = y.to(device)
-            pred = model(X)
-            test_loss += loss_fn(pred.logits, y).item()
-            correct += (pred.logits.argmax(1) == y).type(torch.float).sum().item()
+            pred = model(X, labels=y)
+            test_loss += pred.loss.item()
+            # test_loss += loss_fn(pred.logits, y).item()
+            # print('adding', (pred.logits.argmax(dim=1) == y).type(torch.float).sum().item())
+            correct += (pred.logits.argmax(dim=1) == y).type(torch.float).sum().item()
+            # print('    ', correct)
+
+    # print('total correct:', correct)
 
     test_loss /= len(dataloader)
     correct /= len(dataloader.dataset)
@@ -115,8 +128,8 @@ def test(dataloader, model, loss_fn):
     wandb.log({ 'test_loss': test_loss, 'accuracy': correct })
 
 for t in trange(EPOCHS):
-    train(train_dataloader, model, loss_fn, optimizer)
-    test(val_dataloader, model, loss_fn)
+    train(train_dataloader, model, optimizer)
+    test(val_dataloader, model)
 
 # TEST STUFF
 model.to('cpu')
