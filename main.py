@@ -77,6 +77,9 @@ def load_dataset(tokenizer, dsname='mine'):
         # import time; time.sleep(1)
         return [QAValidationDataset(tokenizer, *dat) for dat in split_dataset(questions, 0.8, 0.1, 0.1, labels)]
 
+    if dsname == 'augmented':
+        data = pd.read_csv('data/squad_augmented.tsv');
+
     if dsname == 'stsb':
         dses = [ hf_load_dataset('stsb_multi_mt', name='en', split=split) for split in ['train', 'dev', 'test'] ]
         return [QAValidationDataset(tokenizer, [ [None, None, None, s1, s1, s2] for s1, s2 in zip(things['sentence1'], things['sentence2']) ], [ s/5 for s in things['similarity_score'] ]) for things in dses]
