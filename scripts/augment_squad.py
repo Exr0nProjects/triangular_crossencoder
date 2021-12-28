@@ -48,16 +48,18 @@ def generate_examples(id, context, question, answer, space_before):
     # random substring from answer
     # TODO: probably high false negative rate
     num_words = len(answer.split())
-    beg = randint(0, num_words-1)
-    end = randint(beg+1, num_words if beg > 0 else num_words-1)
-    ret.append(('_subs', ' '.join(answer.split()[beg:end]), 0))
+    if num_words > 1:
+        beg = randint(0, num_words-1)
+        end = randint(beg+1, num_words if beg > 0 else num_words-1)
+        ret.append(('_subs', ' '.join(answer.split()[beg:end]), 0))
 
     return ret
     # return [['squad_augmented', id + f'_aug{i}', context, question, f_ans, answer] for i, f_ans in enumerate(ret)]
 
 def augment_squad():
-    ret = pd.DataFrame(columns=['id', 'label', 'context', 'question', 'model_answer', 'answers'])
+    rets = {}
     for split in ['train', 'validation']:
+        ret = pd.DataFrame(columns=['id', 'label', 'context', 'question', 'model_answer', 'answers'])
         ds = load_dataset('squad', split=split)
         for row in tqdm(ds):
             id, context, question, answers = itemgetter('id', 'context', 'question', 'answers')(row)
@@ -66,13 +68,16 @@ def augment_squad():
                 # print(f"    '{context[start:start + len(text)]}'")
                 for id_suf, f_ans, label in generate_examples(id, context, question, text, start):
                     ret = ret.append({ 'id': id + id_suf, 'label': int(label), 'context': context, 'question': question, 'model_answer': f_ans, 'answers': dumps(answers['text']) }, ignore_index=True)
-            break
-    print(ret)
+        rets[split] = ret
+    return rets
 
     # TODO: ideas for positive examples: paraphrase, generative answering model, sentence structures templating
     # SOURCE: sts benchmark data from here: http://ixa2.si.ehu.eus/stswiki/index.php/STSbenchmark
 
 if __name__ == '__main__':
-    # seed(1336)
-    augment_squad()
+    SEED = 1336
+    seed(SEED)
+    augmented = augment_squad()
+    for k, v in augmented.items():
+        v.to_csv(f"../data/augmented_squad_{k}_s{SEED}.tsv", sep='\t')
     # print(f"'{seek_words('one two three four five', 4, 11, 2)}'")

@@ -91,7 +91,7 @@ def load_dataset(tokenizer, dsname='mine'):
 
 # TRAIN STUFF
 BATCH_SIZE = 64
-LEARNING_RATE = 1e-2
+LEARNING_RATE = 1e-4
 EPOCHS = int(1e5)
 # dataloaders vs datasets https://pytorch.org/tutorials/beginner/basics/data_tutorial.html
 # finetuning a huggingface model using native pytorch https://huggingface.co/docs/transformers/training
@@ -132,7 +132,7 @@ def train(dataloader, model, optimizer):
 
         wandb.log({'loss': pred.loss.item()})
 
-        if (num % 1000 == 0):
+        if (wandb.run.step % 5000 == 0):
             test(val_dataloader, model)
             model.save_pretrained(f"saved_models/{wandb.run.name}/{num // 1000}k")
 
