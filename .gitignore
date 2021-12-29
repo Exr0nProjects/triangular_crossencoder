@@ -5,3 +5,4 @@ logs/
 .venv/
 saved_models/
 data/
+**/__pycache__
