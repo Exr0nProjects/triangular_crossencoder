@@ -101,36 +101,6 @@ def load_dataset(tokenizer, dsname='mine'):
     # return split_dataset(data, 0.8, 0.1, 0.1, labels)
     return [QAValidationDataset(tokenizer, *dat) for dat in split_dataset(data, 0.8, 0.1, 0.1, labels)]
 
-# TRAIN STUFF
-# dataloaders vs datasets https://pytorch.org/tutorials/beginner/basics/data_tutorial.html
-# finetuning a huggingface model using native pytorch https://huggingface.co/docs/transformers/training
-
-device = 'cuda' if torch.cuda.is_available() else 'cpu'
-print('loading models...')
-model, tokenizer = load_models()
-print('loading datasets...')
-
-sas_dataloader = DataLoader(QAValidationDataset(tokenizer, *qaval_adaptor('sas', get_data(['sas'])[0])))
-
-train_config = {
-    'epochs': int(1e5),
-    'lr': 1e-5,
-    'bs': 32,
-}
-train_phases = [
-    { 'epochs': 100, 'dataset': 'quora' }
-]
-
-# print(f"\ntrain: {len(train_dataloader.dataset)}, val: {len(val_dataloader.dataset)}, test: {len(test_dataloader.dataset)}")
-# print(f"train batches: {len(train_dataloader)}, val batches: {len(val_dataloader)}, test batches: {len(test_dataloader)}\n")
-
-wandb.init(project='qaval_roberta_noaug')
-wandb.watch(model)
-print('config:', train_config, train_phases)
-
-# loss_fn = nn.NLLLoss()
-model.to(device)
-
 def train(dataloader, model, optimizer, validate):
     for num, batch in tqdm(enumerate(dataloader), total=len(dataloader), leave=False):
         X = batch['input_ids'].to(device)
@@ -185,13 +155,6 @@ def test(dataloader, model, name='validation'):
 
     wandb.log({ f'{name}/test_loss': test_loss, f'{name}/accuracy': correct })
 
-# val_dataloader = DataLoader()
-def test_multiple(dataloaders):
-    def run(model):
-        print('beginning validation', end='\r')
-        for name, test_set in dataloaders.items():
-            test(test_set, model, name)
-    return run
 
 def test_multiple(dataloaders):
     def run(model):
@@ -199,22 +162,58 @@ def test_multiple(dataloaders):
             test(test_set, model, name)
     return run
 
-print('beginning train loop')
-for phase in train_phases:
-    conf = { **train_config, **phase }
-    optimizer = torch.optim.SGD(model.parameters(), lr=conf['lr'])
+if __name__ == '__main__':
+# TRAIN STUFF
+# dataloaders vs datasets https://pytorch.org/tutorials/beginner/basics/data_tutorial.html
+# finetuning a huggingface model using native pytorch https://huggingface.co/docs/transformers/training
 
-    train_dataloader, val_dataloader, test_dataloader = [DataLoader(ds, conf['bs'], shuffle=True) for ds in load_dataset(tokenizer, conf['dataset'])]
+    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    print('loading models...')
+    model, tokenizer = load_models()
+    print('loading datasets...')
 
-    validate = test_multiple({
-        'SAS_eval': sas_dataloader,
-        ','.join(conf['dataset']) if isinstance(conf['dataset'], list) else conf['dataset']: val_dataloader,
-    })
+    sas_dataloader = DataLoader(QAValidationDataset(tokenizer, *qaval_adaptor('sas', get_data(['sas'])[0])))
 
-    for t in trange(conf['epochs'], desc=conf['dataset']):
-        train(train_dataloader, model, optimizer, validate)
-        # test(val_dataloader, model)
-        # train(train_dataloader_quora, model, optimizer)
+    train_config = {
+        'epochs': int(1e5),
+        'lr': 1e-5,
+        'bs': 32,
+    }
+    train_phases = [
+        { 'epochs': 10,  'dataset': ['quora'] },
+        { 'epochs': 10,  'dataset': ['quora', 'wes'] },
+        { 'epochs': 100, 'dataset': ['wes'] }
+    ]
+
+# print(f"\ntrain: {len(train_dataloader.dataset)}, val: {len(val_dataloader.dataset)}, test: {len(test_dataloader.dataset)}")
+# print(f"train batches: {len(train_dataloader)}, val batches: {len(val_dataloader)}, test batches: {len(test_dataloader)}\n")
+
+    wandb.init()
+    wandb.watch(model)
+    print('config:', train_config, train_phases)
+
+# loss_fn = nn.NLLLoss()
+    model.to(device)
+
+
+
+    print('beginning train loop')
+    for phase in train_phases:
+        conf = { **train_config, **phase }
+        optimizer = torch.optim.SGD(model.parameters(), lr=conf['lr'])
+
+        train_dataloader, val_dataloader, test_dataloader = [DataLoader(ds, conf['bs'], shuffle=True) for ds in load_dataset(tokenizer, conf['dataset'])]
+
+        validate = test_multiple({
+            'SAS_eval': sas_dataloader,
+            ','.join(conf['dataset']) if isinstance(conf['dataset'], list) else conf['dataset']: val_dataloader,
+        })
+
+        for t in trange(conf['epochs'], desc=str(conf['dataset'])):
+            train(train_dataloader, model, optimizer, validate)
+            # test(val_dataloader, model)
+            # train(train_dataloader_quora, model, optimizer)
+        wandb.log({ 'train_loss': -0.1 }, commit=True)
 
 # TEST STUFF
 # model.to('cpu')
