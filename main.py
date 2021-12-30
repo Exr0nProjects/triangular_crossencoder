@@ -21,11 +21,9 @@ from operator import itemgetter as ig
 # from subprocess import run
 
 def qaval_adaptor(dsnames, dataset):
-    # print(type(dataset[0]), dataset[0])
     assert isinstance(dataset[0], InputExample)
-    # print(next(dataset))
     data = [ (','.join(dsnames), ex.guid, None, None, ex.texts[0], ex.texts[1]) for ex in dataset ]
-    labels = [ ex.label for ex in dataset ]
+    labels = [ int(ex.label) for ex in dataset ]
     return data, labels
 
 class QAValidationDataset(torch.utils.data.Dataset):
@@ -53,6 +51,7 @@ def load_dataset(tokenizer, dsname='mine'):
         return [QAValidationDataset(tokenizer, *qaval_adaptor(dsname, sp)) for sp in get_data(dsname)]
 
     assert dsname in ['mine', 'quora', 'stsb']
+
     def load_raw_data(dataset_file, annotation_file, use_runs):
         data = pd.read_csv(dataset_file)
         data = data[data['run'].isin(use_runs)]
@@ -115,8 +114,8 @@ sas_dataloader = DataLoader(QAValidationDataset(tokenizer, *qaval_adaptor('sas',
 
 train_config = {
     'epochs': int(1e5),
-    'lr': 5e-4,
-    'batch_size': 64
+    'lr': 1e-5,
+    'bs': 32,
 }
 train_phases = [
     { 'epochs': 100, 'dataset': 'quora' }
@@ -154,17 +153,16 @@ def train(dataloader, model, optimizer, validate):
         pred.loss.backward()
         optimizer.step()
 
-        wandb.log({'loss': pred.loss.item()})
-
         if (wandb.run.step % 3000 == 0):
             validate(model)
             model.save_pretrained(f"saved_models/{wandb.run.name}/{num // 1000}k")
+        wandb.log({'loss': pred.loss.item()}, commit=True)
 
-def test(dataloader, model, name="validation"):
+def test(dataloader, model, name='validation'):
     test_loss, correct = 0, 0
 
     with torch.no_grad():
-        for batch in tqdm(dataloader, desc='validating...', leave=False):
+        for batch in tqdm(dataloader, desc=f'val {name}...', leave=False):
             X, y = ig('input_ids', 'labels')(batch)
             X = X.to(device)
             y = batch['labels'].to(device)
@@ -195,21 +193,27 @@ def test_multiple(dataloaders):
             test(test_set, model, name)
     return run
 
+def test_multiple(dataloaders):
+    def run(model):
+        for name, test_set in dataloaders.items():
+            test(test_set, model, name)
+    return run
+
 print('beginning train loop')
 for phase in train_phases:
     conf = { **train_config, **phase }
     optimizer = torch.optim.SGD(model.parameters(), lr=conf['lr'])
 
-    train_dataloader, val_dataloader, test_dataloader = [DataLoader(ds, conf['batch_size'], shuffle=True) for ds in load_dataset(tokenizer, conf['dataset'])]
+    train_dataloader, val_dataloader, test_dataloader = [DataLoader(ds, conf['bs'], shuffle=True) for ds in load_dataset(tokenizer, conf['dataset'])]
 
     validate = test_multiple({
-        ','.join(conf['dataset']): val_dataloader,
         'SAS_eval': sas_dataloader,
+        ','.join(conf['dataset']) if isinstance(conf['dataset'], list) else conf['dataset']: val_dataloader,
     })
 
-    for t in trange(conf['epochs'], desc=str(conf['dataset'])):
-        validate(model)
+    for t in trange(conf['epochs'], desc=conf['dataset']):
         train(train_dataloader, model, optimizer, validate)
+        # test(val_dataloader, model)
         # train(train_dataloader_quora, model, optimizer)
 
 # TEST STUFF
