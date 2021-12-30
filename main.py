@@ -18,13 +18,15 @@ import wandb
 from normal_crossencoder.main import get_data
 
 from operator import itemgetter as ig
-from subprocess import run
+# from subprocess import run
 
 def qaval_adaptor(dsname, dataset):
     assert isinstance(dataset[0], InputExample)
-    print(next(dataset))
-    data = ( (dsname, i, None, None, a, b) for i, a, b, _ in dataset )
-    labels = ( l for _, _, _, l in dataset )
+    data = [ (','.join(dsnames), ex.guid, None, None, ex.texts[0], ex.texts[1]) for ex in dataset ]
+    labels = [ ex.label for ex in dataset ]
+    # print(next(dataset))
+    # data = ( (dsname, i, None, None, a, b) for i, a, b, _ in dataset )
+    # labels = ( l for _, _, _, l in dataset )
     return data, labels
 
 class QAValidationDataset(torch.utils.data.Dataset):
@@ -48,7 +50,11 @@ def load_models():
     return model, tokenizer
 
 def load_dataset(tokenizer, dsname='mine'):
+    if isinstance(dsname, list):
+        return [QAValidationDataset(tokenizer, *qaval_adaptor(dsname, sp)) for sp in get_data(dsname)]
+
     assert dsname in ['mine', 'quora', 'stsb']
+
     def load_raw_data(dataset_file, annotation_file, use_runs):
         data = pd.read_csv(dataset_file)
         data = data[data['run'].isin(use_runs)]
@@ -101,7 +107,6 @@ def load_dataset(tokenizer, dsname='mine'):
 print(DataLoader(QAValidationDataset(*qaval_adaptor('sas', ds))) for ds in get_data(['sas']))
 
 # TRAIN STUFF
-BATCH_SIZE = 32
 # dataloaders vs datasets https://pytorch.org/tutorials/beginner/basics/data_tutorial.html
 # finetuning a huggingface model using native pytorch https://huggingface.co/docs/transformers/training
 
@@ -110,9 +115,12 @@ print('loading models...')
 model, tokenizer = load_models()
 print('loading datasets...')
 
+sas_dataloader = DataLoader(QAValidationDataset(tokenizer, *qaval_adaptor('sas', get_data(['sas'])[0])))
+
 train_config = {
     'epochs': int(1e5),
-    'lr': 1e-4,
+    'lr': 1e-5,
+    'bs': 32,
 }
 train_phases = [
     # { 'epochs': 10,  'dataset': 'stsb' },
@@ -124,11 +132,12 @@ train_phases = [
 
 wandb.init(project='qaval_roberta_noaug')
 wandb.watch(model)
+print('config:', train_config, train_phases)
 
 # loss_fn = nn.NLLLoss()
 model.to(device)
 
-def train(dataloader, model, optimizer):
+def train(dataloader, model, optimizer, validate):
     for num, batch in tqdm(enumerate(dataloader), total=len(dataloader), leave=False):
         X = batch['input_ids'].to(device)
         y = batch['labels'].to(device)
@@ -147,11 +156,12 @@ def train(dataloader, model, optimizer):
 
         wandb.log({'loss': pred.loss.item()})
 
-        if (wandb.run.step % 5000 == 0):
-            test(val_dataloader, model)
+        if (wandb.run.step % 3000 == 0):
+            # test(val_dataloader, model)
+            validate(model)
             model.save_pretrained(f"saved_models/{wandb.run.name}/{num // 1000}k")
 
-def test(dataloader, model):
+def test(dataloader, model, name='validation'):
     test_loss, correct = 0, 0
 
     with torch.no_grad():
@@ -175,7 +185,7 @@ def test(dataloader, model):
     test_loss /= len(dataloader)
     correct /= len(dataloader.dataset)
 
-    wandb.log({ 'test_loss': test_loss, 'accuracy': correct })
+    wandb.log({ name + '/test_loss': test_loss, name + '/accuracy': correct })
 
 # val_dataloader = DataLoader()
 
@@ -184,12 +194,12 @@ for phase in train_phases:
     conf = { **train_config, **phase }
     optimizer = torch.optim.AdamW(model.parameters(), lr=conf['lr'])
 
-    train_dataloader, val_dataloader, test_dataloader = [DataLoader(ds, BATCH_SIZE, shuffle=True) for ds in load_dataset(tokenizer, conf['dataset'])]
+    train_dataloader, val_dataloader, test_dataloader = [DataLoader(ds, conf['bs'], shuffle=True) for ds in load_dataset(tokenizer, conf['dataset'])]
 
     for t in trange(conf['epochs'], desc=conf['dataset']):
-        train(train_dataloader, model, optimizer)
-        # train(train_dataloader_quora, model, optimizer)
         test(val_dataloader, model)
+        train(train_dataloader, model, optimizer, None)
+        # train(train_dataloader_quora, model, optimizer)
 
 # TEST STUFF
 # model.to('cpu')
