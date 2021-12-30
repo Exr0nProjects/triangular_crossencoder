@@ -20,7 +20,7 @@ from normal_crossencoder.main import get_data
 from operator import itemgetter as ig
 # from subprocess import run
 
-def qaval_adaptor(dsname, dataset):
+def qaval_adaptor(dsnames, dataset):
     assert isinstance(dataset[0], InputExample)
     data = [ (','.join(dsnames), ex.guid, None, None, ex.texts[0], ex.texts[1]) for ex in dataset ]
     labels = [ ex.label for ex in dataset ]
@@ -189,12 +189,24 @@ def test(dataloader, model, name='validation'):
 
 # val_dataloader = DataLoader()
 
+def test_multiple(dataloaders):
+    def run(model):
+        print('beginning validation', end='\r')
+        for name, test_set in dataloaders.items():
+            test(test_set, model, name)
+    return run
+
 print('beginning train loop')
 for phase in train_phases:
     conf = { **train_config, **phase }
     optimizer = torch.optim.AdamW(model.parameters(), lr=conf['lr'])
 
     train_dataloader, val_dataloader, test_dataloader = [DataLoader(ds, conf['bs'], shuffle=True) for ds in load_dataset(tokenizer, conf['dataset'])]
+
+    validate = test_multiple({
+        ','.join(conf['dataset']) if isinstance(conf['dataset'], list) else conf['dataset']: val_dataloader,
+        'SAS_eval': sas_dataloader,
+    })
 
     for t in trange(conf['epochs'], desc=conf['dataset']):
         test(val_dataloader, model)
