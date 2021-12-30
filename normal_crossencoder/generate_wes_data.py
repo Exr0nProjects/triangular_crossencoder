@@ -1,21 +1,22 @@
 from datasets import load_dataset
+import pandas as pd
 import numpy as np
 from tqdm import tqdm
 
 from collections import defaultdict
 from operator import itemgetter as ig
 from itertools import islice, chain, repeat
-from random import sample, choice
+from random import sample, choice, shuffle
 from gc import collect
 
-SUBSET = '2018thresh20'
+# SUBSET = '2018thresh20'
 
-def generate_splits(split=[0.75, 0.15, 0.1], subset=SUBSET):
+def generate_splits(subset, split=[0.75, 0.15, 0.1]):
     assert abs(sum(split) - 1.0) < 0.0001
     # get the data in dictionary form
     groups = defaultdict(list)
     ds = load_dataset('Exr0n/wiki-entity-similarity', subset, split='train')
-    ds = list(tqdm(islice(ds, int(1e4)), total=len(ds)))
+    ds = list(tqdm(ds, total=len(ds)))
     for article, link in tqdm(map(ig('article', 'link_text'), ds), total=len(ds)):
         groups[article].append(link)
     del ds
@@ -48,20 +49,30 @@ def generate_splits(split=[0.75, 0.15, 0.1], subset=SUBSET):
                 raise ValueError("well frick one group is bigger than all the others combined. try sampling one at a time")
 
     collect()
-    return [(chain(*s), chain(repeat(0, z), repeat(1, z))) for z, s in zip(sizes, ret)]
+    return [(chain(*s), chain(repeat(1, z), repeat(0, z))) for z, s in zip(sizes, ret)]
 
 
 if __name__ == '__main__':
-    x = generate_splits([0.5, 0.4, 0.1])
-    for data, labels in x[2:]:
-        data = list(data)
-        labels = list(labels)
+    for size in [5, 10, 20]:
+        x = generate_splits(subset='2018thresh' + str(size))
 
-        assert sum(labels) * 2 == len(labels)
-        num = sum(labels)
+        for (data, labels), split in zip(x, ['train', 'dev', 'test']):
+            articles, lts = list(zip(*data))
+            df = pd.DataFrame({ 'article': articles, 'link_text': lts, 'is_same': list(labels) })
+            df = df.sample(frac=1).reset_index(drop=True)
+            df.to_csv('2018thresh' + str(size) + split + '.csv', index=False)
+            # print(df.head(30), df.tail(30))
 
-        before = [ a for a, _ in data[:num] ]
-        after  = [ a for a, _ in data[num:] ]
-        assert before == after
-
-        print(data[num:])
+    # tests
+    # for data, labels in x[2:]:
+    #     data = list(data)
+    #     labels = list(labels)
+    #
+    #     assert sum(labels) * 2 == len(labels)
+    #     num = sum(labels)
+    #
+    #     before = [ a for a, _ in data[:num] ]
+    #     after  = [ a for a, _ in data[num:] ]
+    #     assert before == after
+    #
+    #     print(data[num:])

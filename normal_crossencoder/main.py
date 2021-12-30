@@ -13,11 +13,11 @@ import pandas as pd
 from operator import itemgetter as ig
 
 RUN_CONFIG = {
-    'batch_size': 16,
+    'batch_size': 32,
     'epochs': int(1e5),
     'warmup': int(1e2),
     'eval_steps': int(1e3),
-    'base_model': 'cross-encoder/stsb-roberta-large',
+    'base_model': 'cross-encoder/stsb-roberta-base',
     'training': [
         {
             'train_data': ['stsb'],
@@ -25,7 +25,7 @@ RUN_CONFIG = {
         },
         {
             'train_data': ['quora'],
-            'epochs': 100
+            'epochs': 1000
         }
     ]
 }
@@ -81,14 +81,16 @@ def get_data(dsnames):
             ret = [ flat(gen_symmetric_ex(f"stsb-{i}", x['sentence1'], x['sentence2'], x['similarity_score']/5) for i, x in enumerate(ds)) for ds in dses ]
             return ret
         elif dsname == 'sas':
-            sas_squad = pd.read_csv('../data/semantic_answer_similarity_data/data/SQuAD_SAS.csv')
-            sas_nqopen = pd.read_csv('../data/semantic_answer_similarity_data/data/NQ-open_SAS.csv')
+            sas_squad = pd.read_csv('data/semantic_answer_similarity_data/data/SQuAD_SAS.csv')
+            sas_nqopen = pd.read_csv('data/semantic_answer_similarity_data/data/NQ-open_SAS.csv')
             # sas_squad['run'] = ['sas_squad'] * len(sas_squad)
             # sas_squad['id'] = ['sas_squad' + int(x) for x in sas_squad.index]
             # sas_nqopen['run'] = ['sas_nqopen'] * len(sas_nqopen)
             # sas_squad['id'] = ['sas_nqopen' + int(x) for x in sas_nqopen.index]
             sas_data = pd.concat([sas_squad, sas_nqopen])
             return [ flat(gen_symmetric_ex(f"sas-{i}", a, b, l >= 1) for i, (a, b, l) in sas_data.iterrows()), [], [] ]
+        elif dsname == 'wes':
+            raise NotImplementedError('TODO')
         else:
             raise ValueError(f"unknown dataset '{dsname}'")
 
@@ -121,8 +123,8 @@ if __name__ == '__main__':
         # wandb.config.update(train_phase)
         # print(wandb.config)
         train, dev, test = get_data(conf['train_data'])
-        # evaluator = CECorrelationEvaluator.from_input_examples(dev, name=f"{wandb.run.id}-phase-{i}")
-        evaluator = CEBinaryClassificationEvaluator.from_input_examples(eval_data, name='final_metric')
+        evaluator = CECorrelationEvaluator.from_input_examples(dev, name=f"{wandb.run.id}-phase-{i}")
+        # evaluator = CEBinaryClassificationEvaluator.from_input_examples(eval_data, name='final_metric')
 
         model.fit(train_dataloader=DataLoader(train, shuffle=True, batch_size=conf['batch_size']),
                   evaluator=evaluator,
