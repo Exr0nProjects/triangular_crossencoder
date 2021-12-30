@@ -18,13 +18,14 @@ import wandb
 from normal_crossencoder.main import get_data
 
 from operator import itemgetter as ig
-from subprocess import run
+# from subprocess import run
 
-def qaval_adaptor(dsname, dataset):
+def qaval_adaptor(dsnames, dataset):
+    # print(type(dataset[0]), dataset[0])
     assert isinstance(dataset[0], InputExample)
-    print(next(dataset))
-    data = ( (dsname, i, None, None, a, b) for i, a, b, _ in dataset )
-    labels = ( l for _, _, _, l in dataset )
+    # print(next(dataset))
+    data = [ (','.join(dsnames), ex.guid, None, None, ex.texts[0], ex.texts[1]) for ex in dataset ]
+    labels = [ ex.label for ex in dataset ]
     return data, labels
 
 class QAValidationDataset(torch.utils.data.Dataset):
@@ -48,6 +49,9 @@ def load_models():
     return model, tokenizer
 
 def load_dataset(tokenizer, dsname='mine'):
+    if isinstance(dsname, list):
+        return [QAValidationDataset(tokenizer, *qaval_adaptor(dsname, sp)) for sp in get_data(dsname)]
+
     assert dsname in ['mine', 'quora', 'stsb']
     def load_raw_data(dataset_file, annotation_file, use_runs):
         data = pd.read_csv(dataset_file)
@@ -98,10 +102,7 @@ def load_dataset(tokenizer, dsname='mine'):
     # return split_dataset(data, 0.8, 0.1, 0.1, labels)
     return [QAValidationDataset(tokenizer, *dat) for dat in split_dataset(data, 0.8, 0.1, 0.1, labels)]
 
-print(DataLoader(QAValidationDataset(*qaval_adaptor('sas', ds))) for ds in get_data(['sas']))
-
 # TRAIN STUFF
-BATCH_SIZE = 32
 # dataloaders vs datasets https://pytorch.org/tutorials/beginner/basics/data_tutorial.html
 # finetuning a huggingface model using native pytorch https://huggingface.co/docs/transformers/training
 
@@ -110,12 +111,14 @@ print('loading models...')
 model, tokenizer = load_models()
 print('loading datasets...')
 
+sas_dataloader = DataLoader(QAValidationDataset(tokenizer, *qaval_adaptor('sas', get_data(['sas'])[0])))
+
 train_config = {
     'epochs': int(1e5),
-    'lr': 1e-4,
+    'lr': 5e-4,
+    'batch_size': 64
 }
 train_phases = [
-    # { 'epochs': 10,  'dataset': 'stsb' },
     { 'epochs': 100, 'dataset': 'quora' }
 ]
 
@@ -124,72 +127,90 @@ train_phases = [
 
 wandb.init(project='qaval_roberta_noaug')
 wandb.watch(model)
+print('config:', train_config, train_phases)
 
 # loss_fn = nn.NLLLoss()
 model.to(device)
 
-def train(dataloader, model, optimizer):
+def train(dataloader, model, optimizer, validate):
     for num, batch in tqdm(enumerate(dataloader), total=len(dataloader), leave=False):
         X = batch['input_ids'].to(device)
+        # y = batch['labels'].to(device)
+
+        # print('\n\ny shape', y, '\nx shape', X.shape, '\n\n')
+        # return
+
         y = batch['labels'].to(device)
-
-        # y = batch['labels']
-        # y = torch.stack((y, 1-y)).transpose(0, 1).to(device)
-
-        # print(type(y), y.shape, y.dtype, y[:3], type(X), X.shape)
-
-        y = y.to(device)
-        pred = model(X, labels=y)
+        # # print('\n\ny dtype', y.dtype, type(y.dtype))
+        # if y.dtype == torch.float32:
+        #     y = torch.stack((y, 1-y)).transpose(0, 1)
+        # # print(type(y), y.shape, y.dtype, y[:3], type(X), X.shape)
+        # # y = y.to(device)
 
         optimizer.zero_grad()
+
+        pred = model(X, labels=y)
+
         pred.loss.backward()
         optimizer.step()
 
         wandb.log({'loss': pred.loss.item()})
 
-        if (wandb.run.step % 5000 == 0):
-            test(val_dataloader, model)
+        if (wandb.run.step % 3000 == 0):
+            validate(model)
             model.save_pretrained(f"saved_models/{wandb.run.name}/{num // 1000}k")
 
-def test(dataloader, model):
+def test(dataloader, model, name="validation"):
     test_loss, correct = 0, 0
 
     with torch.no_grad():
         for batch in tqdm(dataloader, desc='validating...', leave=False):
             X, y = ig('input_ids', 'labels')(batch)
             X = X.to(device)
-            y = batch['labels']
+            y = batch['labels'].to(device)
 
-            # accuracy = (y > 0.5).type(torch.int).to(device)
-            # y = torch.stack((y, 1-y)).transpose(0, 1)
+            accuracy = (y > 0.5).type(torch.int).to(device)
+            # if y.dtype == torch.float32:
+            #     y = torch.stack((y, 1-y)).transpose(0, 1)
 
-            y = y.to(device)
+            # y = y.to(device)
             pred = model(X, labels=y)
             test_loss += pred.loss.item()
 
-            # correct += (pred.logits.argmax(dim=1) == accuracy).type(torch.float).sum().item()
-            correct += (pred.logits.argmax(dim=1) == y).type(torch.float).sum().item()
+            correct += (pred.logits.argmax(dim=1) == accuracy).type(torch.float).sum().item()
+            # correct += (pred.logits.argmax(dim=1) == y).type(torch.float).sum().item()
 
     # print('total correct:', correct)
 
     test_loss /= len(dataloader)
     correct /= len(dataloader.dataset)
 
-    wandb.log({ 'test_loss': test_loss, 'accuracy': correct })
+    wandb.log({ f'{name}/test_loss': test_loss, f'{name}/accuracy': correct })
 
 # val_dataloader = DataLoader()
+def test_multiple(dataloaders):
+    def run(model):
+        print('beginning validation', end='\r')
+        for name, test_set in dataloaders.items():
+            test(test_set, model, name)
+    return run
 
 print('beginning train loop')
 for phase in train_phases:
     conf = { **train_config, **phase }
-    optimizer = torch.optim.AdamW(model.parameters(), lr=conf['lr'])
+    optimizer = torch.optim.SGD(model.parameters(), lr=conf['lr'])
 
-    train_dataloader, val_dataloader, test_dataloader = [DataLoader(ds, BATCH_SIZE, shuffle=True) for ds in load_dataset(tokenizer, conf['dataset'])]
+    train_dataloader, val_dataloader, test_dataloader = [DataLoader(ds, conf['batch_size'], shuffle=True) for ds in load_dataset(tokenizer, conf['dataset'])]
 
-    for t in trange(conf['epochs'], desc=conf['dataset']):
-        train(train_dataloader, model, optimizer)
+    validate = test_multiple({
+        ','.join(conf['dataset']): val_dataloader,
+        'SAS_eval': sas_dataloader,
+    })
+
+    for t in trange(conf['epochs'], desc=str(conf['dataset'])):
+        validate(model)
+        train(train_dataloader, model, optimizer, validate)
         # train(train_dataloader_quora, model, optimizer)
-        test(val_dataloader, model)
 
 # TEST STUFF
 # model.to('cpu')
@@ -198,4 +219,3 @@ for phase in train_phases:
 # outputs = model(**inputs, labels=labels)
 # loss = outputs.loss
 # logits = outputs.logits
-
