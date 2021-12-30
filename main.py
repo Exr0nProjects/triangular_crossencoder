@@ -2,7 +2,8 @@ DATASET_FILE, HUMAN_ANNOTATIONS = 'sampled_fails_500.csv', 'analyzed_fails_984.t
 RUNS = ['bert_large:squad', 'bert_large:nq_closed']
 
 # load models and datasets
-from sentence_transformers.cross_encoder import CrossEncoder, InputExample
+from sentence_transformers.cross_encoder import CrossEncoder
+from sentence_transformers import InputExample
 from datasets import load_dataset as hf_load_dataset
 
 from transformers import RobertaTokenizer, RobertaForSequenceClassification
@@ -97,7 +98,7 @@ def load_dataset(tokenizer, dsname='mine'):
     # return split_dataset(data, 0.8, 0.1, 0.1, labels)
     return [QAValidationDataset(tokenizer, *dat) for dat in split_dataset(data, 0.8, 0.1, 0.1, labels)]
 
-print(DataLoader(QAValidationDataset(*qaval_adaptor('sas', get_data(['sas'])))))
+print(DataLoader(QAValidationDataset(*qaval_adaptor('sas', ds))) for ds in get_data(['sas']))
 
 # TRAIN STUFF
 BATCH_SIZE = 32
@@ -114,7 +115,7 @@ train_config = {
     'lr': 1e-4,
 }
 train_phases = [
-    { 'epochs': 10,  'dataset': 'stsb' },
+    # { 'epochs': 10,  'dataset': 'stsb' },
     { 'epochs': 100, 'dataset': 'quora' }
 ]
 
