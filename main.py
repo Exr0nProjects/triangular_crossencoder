@@ -2,7 +2,7 @@ DATASET_FILE, HUMAN_ANNOTATIONS = 'sampled_fails_500.csv', 'analyzed_fails_984.t
 RUNS = ['bert_large:squad', 'bert_large:nq_closed']
 
 # load models and datasets
-from sentence_transformers.cross_encoder import CrossEncoder
+from sentence_transformers.cross_encoder import CrossEncoder, InputExample
 from datasets import load_dataset as hf_load_dataset
 
 from transformers import RobertaTokenizer, RobertaForSequenceClassification
@@ -14,8 +14,17 @@ import pandas as pd
 from tqdm import tqdm, trange
 import wandb
 
-from operator import itemgetter
+from normal_crossencoder.main import get_data
+
+from operator import itemgetter as ig
 from subprocess import run
+
+def qaval_adaptor(dsname, dataset):
+    assert isinstance(dataset[0], InputExample)
+    print(next(dataset))
+    data = ( (dsname, i, None, None, a, b) for i, a, b, _ in dataset )
+    labels = ( l for _, _, _, l in dataset )
+    return data, labels
 
 class QAValidationDataset(torch.utils.data.Dataset):
     def __init__(self, tokenizer, data, labels):
@@ -70,7 +79,7 @@ def load_dataset(tokenizer, dsname='mine'):
 
     if dsname == 'quora':
         ds = hf_load_dataset('quora', split='train')
-        questions, labels = itemgetter('questions', 'is_duplicate')(ds)
+        questions, labels = ig('questions', 'is_duplicate')(ds)
         questions = [ ['quora', x['id'][0]//2, None, None, *x['text']] for x in questions ]
         labels = [ int(x) for x in labels ]
         # print(questions)
@@ -88,11 +97,10 @@ def load_dataset(tokenizer, dsname='mine'):
     # return split_dataset(data, 0.8, 0.1, 0.1, labels)
     return [QAValidationDataset(tokenizer, *dat) for dat in split_dataset(data, 0.8, 0.1, 0.1, labels)]
 
+print(DataLoader(QAValidationDataset(*qaval_adaptor('sas', get_data(['sas'])))))
 
 # TRAIN STUFF
-BATCH_SIZE = 64
-LEARNING_RATE = 1e-4
-EPOCHS = int(1e5)
+BATCH_SIZE = 32
 # dataloaders vs datasets https://pytorch.org/tutorials/beginner/basics/data_tutorial.html
 # finetuning a huggingface model using native pytorch https://huggingface.co/docs/transformers/training
 
@@ -100,17 +108,23 @@ device = 'cuda' if torch.cuda.is_available() else 'cpu'
 print('loading models...')
 model, tokenizer = load_models()
 print('loading datasets...')
-train_dataloader, val_dataloader, test_dataloader = [DataLoader(ds, BATCH_SIZE, shuffle=True) for ds in load_dataset(tokenizer, 'quora')]
 
-print(f"\ntrain: {len(train_dataloader.dataset)}, val: {len(val_dataloader.dataset)}, test: {len(test_dataloader.dataset)}")
-print(f"train batches: {len(train_dataloader)}, val batches: {len(val_dataloader)}, test batches: {len(test_dataloader)}\n")
-# train_dataloader, val_dataloader, test_dataloader = [DataLoader(ds, BATCH_SIZE, shuffle=True) for ds in load_dataset(tokenizer)]
+train_config = {
+    'epochs': int(1e5),
+    'lr': 1e-4,
+}
+train_phases = [
+    { 'epochs': 10,  'dataset': 'stsb' },
+    { 'epochs': 100, 'dataset': 'quora' }
+]
+
+# print(f"\ntrain: {len(train_dataloader.dataset)}, val: {len(val_dataloader.dataset)}, test: {len(test_dataloader.dataset)}")
+# print(f"train batches: {len(train_dataloader)}, val batches: {len(val_dataloader)}, test batches: {len(test_dataloader)}\n")
+
 wandb.init(project='qaval_roberta_noaug')
 wandb.watch(model)
 
 # loss_fn = nn.NLLLoss()
-optimizer = torch.optim.SGD(model.parameters(), lr=LEARNING_RATE)
-
 model.to(device)
 
 def train(dataloader, model, optimizer):
@@ -141,7 +155,7 @@ def test(dataloader, model):
 
     with torch.no_grad():
         for batch in tqdm(dataloader, desc='validating...', leave=False):
-            X, y = itemgetter('input_ids', 'labels')(batch)
+            X, y = ig('input_ids', 'labels')(batch)
             X = X.to(device)
             y = batch['labels']
 
@@ -162,17 +176,25 @@ def test(dataloader, model):
 
     wandb.log({ 'test_loss': test_loss, 'accuracy': correct })
 
+# val_dataloader = DataLoader()
+
 print('beginning train loop')
-for t in trange(EPOCHS):
-    train(train_dataloader, model, optimizer)
-    # train(train_dataloader_quora, model, optimizer)
-    test(val_dataloader, model)
+for phase in train_phases:
+    conf = { **train_config, **phase }
+    optimizer = torch.optim.AdamW(model.parameters(), lr=conf['lr'])
+
+    train_dataloader, val_dataloader, test_dataloader = [DataLoader(ds, BATCH_SIZE, shuffle=True) for ds in load_dataset(tokenizer, conf['dataset'])]
+
+    for t in trange(conf['epochs'], desc=conf['dataset']):
+        train(train_dataloader, model, optimizer)
+        # train(train_dataloader_quora, model, optimizer)
+        test(val_dataloader, model)
 
 # TEST STUFF
-model.to('cpu')
-inputs = tokenizer("Hello, my dog is cute", return_tensors="pt")
-labels = torch.tensor([1]).unsqueeze(0)  # Batch size 1
-outputs = model(**inputs, labels=labels)
-loss = outputs.loss
-logits = outputs.logits
+# model.to('cpu')
+# inputs = tokenizer("Hello, my dog is cute", return_tensors="pt")
+# labels = torch.tensor([1]).unsqueeze(0)  # Batch size 1
+# outputs = model(**inputs, labels=labels)
+# loss = outputs.loss
+# logits = outputs.logits
 
