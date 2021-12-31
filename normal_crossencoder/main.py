@@ -30,7 +30,7 @@ RUN_CONFIG = {
     ]
 }
 
-def split_dataset(data, train_ratio = 0.75, val_ratio = 0.15, test_ratio = 0.10, labels=None):
+def split_dataset(data, train_ratio = 0.8, val_ratio = 0.1, test_ratio = 0.10, labels=None):
     from sklearn.model_selection import train_test_split
     # train/test/val algorithm from https://datascience.stackexchange.com/a/53161
 
@@ -73,7 +73,7 @@ def get_data(dsnames):
             data = [ (f"quora-{x['id'][0]//2}", *x['text']) for x in ds['questions'] ]
             labels = [ float(x) for x in ds['is_duplicate'] ]
 
-            dses = split_dataset(data, 0.75, 0.15, 0.1, labels)
+            dses = split_dataset(data, 0.8, 0.1, 0.1, labels)
 
             return [ flat(gen_symmetric_ex(i, a, b, s) for (i, a, b), s in zip(dat, lab)) for (dat, lab) in dses ]
         elif dsname == 'stsb':

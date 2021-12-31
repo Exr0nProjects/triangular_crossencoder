@@ -125,7 +125,7 @@ def train(dataloader, model, optimizer, validate):
 
         if (wandb.run.step % 3000 == 0):
             validate(model)
-            model.save_pretrained(f"saved_models/{wandb.run.name}/{num // 1000}k")
+            model.save_pretrained(f"saved_models/{wandb.run.name}/{wandb.run.step // 1000}k")
         wandb.log({'loss': pred.loss.item()}, commit=True)
 
 def test(dataloader, model, name='validation'):
@@ -176,21 +176,25 @@ if __name__ == '__main__':
 
     train_config = {
         'epochs': int(1e5),
-        'lr': 1e-5,
-        'bs': 32,
+        'lr': 3e-6,
+        'bs': 16,
     }
     train_phases = [
-        { 'epochs': 10,  'dataset': ['quora'] },
-        { 'epochs': 10,  'dataset': ['quora', 'wes'] },
+        { 'epochs': 1,  'dataset': ['quora'] },
+        { 'epochs': 2,  'dataset': ['quora', 'wes'] },
         { 'epochs': 100, 'dataset': ['wes'] }
     ]
 
 # print(f"\ntrain: {len(train_dataloader.dataset)}, val: {len(val_dataloader.dataset)}, test: {len(test_dataloader.dataset)}")
 # print(f"train batches: {len(train_dataloader)}, val batches: {len(val_dataloader)}, test batches: {len(test_dataloader)}\n")
 
+    optimizer = torch.optim.SGD(model.parameters(), lr=train_config['lr'])
+
     wandb.init()
     wandb.watch(model)
+    print('model', model)
     print('config:', train_config, train_phases)
+    print('optimizer', optimizer)
 
 # loss_fn = nn.NLLLoss()
     model.to(device)
@@ -200,7 +204,6 @@ if __name__ == '__main__':
     print('beginning train loop')
     for phase in train_phases:
         conf = { **train_config, **phase }
-        optimizer = torch.optim.SGD(model.parameters(), lr=conf['lr'])
 
         train_dataloader, val_dataloader, test_dataloader = [DataLoader(ds, conf['bs'], shuffle=True) for ds in load_dataset(tokenizer, conf['dataset'])]
 
