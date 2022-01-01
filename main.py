@@ -10,7 +10,7 @@ from transformers import RobertaTokenizer, RobertaForSequenceClassification
 from transformers import Trainer, TrainingArguments
 import torch
 from torch import nn
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, Subset
 import pandas as pd
 from tqdm import tqdm, trange
 import wandb
@@ -18,6 +18,7 @@ import wandb
 from normal_crossencoder.main import get_data
 
 from operator import itemgetter as ig
+from itertools import islice
 # from subprocess import run
 
 def qaval_adaptor(dsnames, dataset):
@@ -172,15 +173,15 @@ if __name__ == '__main__':
     model, tokenizer = load_models()
     print('loading datasets...')
 
-    sas_dataloader = DataLoader(QAValidationDataset(tokenizer, *qaval_adaptor('sas', get_data(['sas'])[0])))
+    sas_dataloader = DataLoader(QAValidationDataset(tokenizer, *qaval_adaptor('sas', get_data(['sas'])[0])), batch_size=64)
 
     train_config = {
         'epochs': int(1e5),
-        'lr': 3e-6,
-        'bs': 16,
+        'lr': 1e-3,
+        'bs': 32,
     }
     train_phases = [
-        { 'epochs': 1,  'dataset': ['quora'] },
+        { 'epochs': 1,  'dataset': 'quora' },
         { 'epochs': 2,  'dataset': ['quora', 'wes'] },
         { 'epochs': 100, 'dataset': ['wes'] }
     ]
@@ -188,7 +189,7 @@ if __name__ == '__main__':
 # print(f"\ntrain: {len(train_dataloader.dataset)}, val: {len(val_dataloader.dataset)}, test: {len(test_dataloader.dataset)}")
 # print(f"train batches: {len(train_dataloader)}, val batches: {len(val_dataloader)}, test batches: {len(test_dataloader)}\n")
 
-    optimizer = torch.optim.SGD(model.parameters(), lr=train_config['lr'])
+    optimizer = torch.optim.AdamW(model.parameters(), lr=train_config['lr'])
 
     wandb.init()
     wandb.watch(model)
@@ -216,7 +217,7 @@ if __name__ == '__main__':
             train(train_dataloader, model, optimizer, validate)
             # test(val_dataloader, model)
             # train(train_dataloader_quora, model, optimizer)
-        wandb.log({ 'train_loss': -0.1 }, commit=True)
+        wandb.log({ 'loss': -0.1 }, commit=True)
 
 # TEST STUFF
 # model.to('cpu')

@@ -90,7 +90,9 @@ def get_data(dsnames):
             sas_data = pd.concat([sas_squad, sas_nqopen])
             return [ flat(gen_symmetric_ex(f"sas-{i}", a, b, l >= 1) for i, (a, b, l) in sas_data.iterrows()), [], [] ]
         elif dsname == 'wes':
-            raise NotImplementedError('TODO')
+            SPLITS = ['train', 'validation', 'test']
+            dses = [ load_dataset('Exr0n/wiki-entity-similarity', '2018thresh20pairs', split=sp) for sp in SPLITS ]
+            return [ ( InputExample(f"wes-2018p20-{i}", [x['article'], x['link_text']], x['is_same']) for i, x in enumerate(tqdm(ds, desc=f"WES-{sp}")) ) for sp, ds in zip(SPLITS, dses) ]
         else:
             raise ValueError(f"unknown dataset '{dsname}'")
 
