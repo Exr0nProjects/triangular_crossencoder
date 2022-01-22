@@ -21,12 +21,16 @@ RUN_CONFIG = {
     'training': [
         {
             'train_data': ['stsb'],
-            'epochs': 5,
+            'epochs': 100,
         },
-        {
-            'train_data': ['quora'],
-            'epochs': 1000
-        }
+        # {
+        #     'train_data': ['quora'],
+        #     'epochs': 1000
+        # }
+        # {
+        #     'train_data': ['wes'],
+        #     'epochs': 100,
+        # }
     ]
 }
 
@@ -111,6 +115,7 @@ class LoggingLoss:
         wandb.log({ 'train_loss': loss })
         return loss
 
+
 if __name__ == '__main__':
     wandb.init(config=RUN_CONFIG)
 
@@ -125,8 +130,8 @@ if __name__ == '__main__':
         # wandb.config.update(train_phase)
         # print(wandb.config)
         train, dev, test = get_data(conf['train_data'])
-        evaluator = CECorrelationEvaluator.from_input_examples(dev, name=f"{wandb.run.id}-phase-{i}")
-        # evaluator = CEBinaryClassificationEvaluator.from_input_examples(eval_data, name='final_metric')
+        # evaluator = CECorrelationEvaluator.from_input_examples(dev, name=f"{wandb.run.id}-phase-{i}")
+        evaluator = CEBinaryClassificationEvaluator.from_input_examples(eval_data, name='final_metric')
 
         model.fit(train_dataloader=DataLoader(train, shuffle=True, batch_size=conf['batch_size']),
                   evaluator=evaluator,

@@ -98,7 +98,7 @@ def load_dataset(tokenizer, dsname='mine'):
 
     if dsname == 'stsb':
         dses = [ hf_load_dataset('stsb_multi_mt', name='en', split=split) for split in ['train', 'dev', 'test'] ]
-        return [QAValidationDataset(tokenizer, [ [None, None, None, s1, s1, s2] for s1, s2 in zip(things['sentence1'], things['sentence2']) ], [ s/5 for s in things['similarity_score'] ]) for things in dses]
+        return [QAValidationDataset(tokenizer, [ [None, None, None, s1, s1, s2] for s1, s2 in zip(things['sentence1'], things['sentence2']) ], [ int(s >= 3) for s in things['similarity_score'] ]) for things in dses]
 
     data, labels = load_raw_data(DATASET_FILE, HUMAN_ANNOTATIONS, RUNS)
     # return split_dataset(data, 0.8, 0.1, 0.1, labels)
@@ -119,13 +119,13 @@ sas_dataloader = DataLoader(QAValidationDataset(tokenizer, *qaval_adaptor('sas',
 
 train_config = {
     'epochs': int(1e5),
-    'lr': 1e-5,
+    'lr': 1e-6,
     'bs': 32,
 }
 train_phases = [
-    # { 'epochs': 10,  'dataset': 'stsb' },
-    { 'epochs': 1, 'dataset': ['wes'] },
-    { 'epochs': 1, 'dataset': 'quora' },
+    { 'epochs': 1000,  'dataset': 'stsb' },
+    # { 'epochs': 1, 'dataset': ['wes'] },
+    # { 'epochs': 1, 'dataset': 'quora' },
 ]
 
 # print(f"\ntrain: {len(train_dataloader.dataset)}, val: {len(val_dataloader.dataset)}, test: {len(test_dataloader.dataset)}")
@@ -157,7 +157,7 @@ def train(dataloader, model, optimizer, validate):
 
         if (wandb.run.step % 3000 == 0):
             validate(model)
-            model.save_pretrained(f"saved_models/{wandb.run.name}/{num // 1000}k")
+            model.save_pretrained(f"saved_models/{wandb.run.name}/{wandb.run.step // 1000}k")
         wandb.log({'loss': pred.loss.item()}, commit=True)
 
 def test(dataloader, model, name='validation'):
